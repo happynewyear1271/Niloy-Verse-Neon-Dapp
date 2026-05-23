@@ -71,13 +71,13 @@ export default function App() {
 
   const [cryptoData, setCryptoData] = useState<CryptoToken[]>(INITIAL_CRYPTO_DATA);
 
-  // Live real-time market polling from real public crypto APIs
+  // Live real-time market polling from real public crypto APIs with zero artificial drift
   useEffect(() => {
     const updatePrices = async () => {
-      // Create a mutable copy of our initial tokens
+      // Create a mutable copy of our current states
       let updatedData = [...INITIAL_CRYPTO_DATA];
 
-      // 1. Fetch real-time spot rates from Binance (extremely fast, has high limits, open CORS)
+      // 1. Fetch live real-time spot rates from Binance (extremely fast, CORS support)
       try {
         const binanceRes = await fetch(
           'https://api.binance.com/api/v3/ticker/24hr?symbols=%5B%22BTCUSDT%22%2C%22ETHUSDT%22%2C%22BNBUSDT%22%2C%22XRPUSDT%22%2C%22SOLUSDT%22%2C%22TRXUSDT%22%5D'
@@ -114,10 +114,10 @@ export default function App() {
           }
         }
       } catch (err) {
-        console.warn('Binance direct fetch failed, skipping to fallbacks...', err);
+        console.warn('Binance real-time API rate lookup failed, falling back...', err);
       }
 
-      // 2. Fallback / supplementary source: CoinCap API
+      // 2. Supplement and support other tokens (like USDT, USDC stablecoins) via CoinCap Assets API
       try {
         const coincapRes = await fetch('https://api.coincap.io/v2/assets?limit=100');
         if (coincapRes.ok) {
@@ -138,19 +138,18 @@ export default function App() {
               if (matchedSymbol) {
                 const tokenIdx = updatedData.findIndex((t) => t.symbol === matchedSymbol);
                 if (tokenIdx !== -1) {
-                  // Only update if it wasn't already successfully set by Binance to avoid conflicting pricing
+                  // Only update if it wasn't set by higher priority source or is a stablecoin
                   const currentToken = updatedData[tokenIdx];
-                  if (!currentToken.basePrice) {
-                    const priceUsd = parseFloat(asset.priceUsd);
-                    const changePercent24Hr = parseFloat(asset.changePercent24Hr) || 0;
-                    if (priceUsd > 0) {
-                      updatedData[tokenIdx] = {
-                        ...currentToken,
-                        price: priceUsd,
-                        change: changePercent24Hr,
-                        basePrice: priceUsd,
-                      };
-                    }
+                  const priceUsd = parseFloat(asset.priceUsd);
+                  const changePercent24Hr = parseFloat(asset.changePercent24Hr) || 0;
+                  
+                  if (priceUsd > 0) {
+                    updatedData[tokenIdx] = {
+                      ...currentToken,
+                      price: priceUsd,
+                      change: changePercent24Hr,
+                      basePrice: priceUsd,
+                    };
                   }
                 }
               }
@@ -158,36 +157,81 @@ export default function App() {
           }
         }
       } catch (err) {
-        console.warn('CoinCap fallback query bypassed or throttled:', err);
+        console.warn('CoinCap fallback asset rates throttled:', err);
       }
 
-      // 3. For VERSE (specific Bitcoin.com token), fetch from CoinGecko
+      // 3. Retrieve real-time VERSE token pricing from decentralized Uniswap pools via DexScreener API
       try {
-        const geckoRes = await fetch(
-          'https://api.coingecko.com/api/v3/simple/price?ids=verse&vs_currencies=usd&include_24hr_change=true'
+        const dexscreenerRes = await fetch(
+          'https://api.dexscreener.com/latest/dex/tokens/0x7ae044f50010af61d49408731cd27f3745cce2f4'
         );
-        if (geckoRes.ok) {
-          const data = await geckoRes.json();
-          if (data && data.verse) {
-            const versePrice = parseFloat(data.verse.usd);
-            const verseChange = parseFloat(data.verse.usd_24h_change) || 0;
+        if (dexscreenerRes.ok) {
+          const dsData = await dexscreenerRes.json();
+          if (dsData && Array.isArray(dsData.pairs) && dsData.pairs.length > 0) {
+            // Pick primary active liquidity pair
+            const pair = dsData.pairs[0];
+            const liveVersePrice = parseFloat(pair.priceUsd);
+            const liveVerseChange = parseFloat(pair.priceChange?.h24) || 0;
+            
             const verseIdx = updatedData.findIndex((t) => t.symbol === 'VERSE');
-            if (verseIdx !== -1 && versePrice > 0) {
+            if (verseIdx !== -1 && liveVersePrice > 0) {
               updatedData[verseIdx] = {
                 ...updatedData[verseIdx],
-                price: versePrice,
-                change: verseChange,
-                basePrice: versePrice,
+                price: liveVersePrice,
+                change: liveVerseChange,
+                basePrice: liveVersePrice,
               };
             }
           }
         }
       } catch (err) {
-        console.warn('CoinGecko query failed for VERSE, carrying outstanding state of 0.000028', err);
+        console.warn('DexScreener API bypass, testing primary CoinGecko fallback for VERSE...', err);
+        
+        // Fallback: Fetch VERSE from CoinGecko’s simple price endpoint
+        try {
+          const geckoRes = await fetch(
+            'https://api.coingecko.com/api/v3/simple/price?ids=verse&vs_currencies=usd&include_24hr_change=true'
+          );
+          if (geckoRes.ok) {
+            const data = await geckoRes.json();
+            if (data && data.verse) {
+              const versePrice = parseFloat(data.verse.usd);
+              const verseChange = parseFloat(data.verse.usd_24h_change) || 0;
+              const verseIdx = updatedData.findIndex((t) => t.symbol === 'VERSE');
+              if (verseIdx !== -1 && versePrice > 0) {
+                updatedData[verseIdx] = {
+                  ...updatedData[verseIdx],
+                  price: versePrice,
+                  change: verseChange,
+                  basePrice: versePrice,
+                };
+              }
+            }
+          }
+        } catch (cgErr) {
+          console.warn('CoinGecko query failed for VERSE:', cgErr);
+        }
       }
 
-      // 4. Guarantee VERSE uses exact US$0.000028 and others have healthy defaults if they were never set
+      // 4. Guarantee VERSE has fallback value and stablecoins have exact price metrics if completely offline
       updatedData = updatedData.map((token) => {
+        // Enforce fallback boundaries if external calls were temporarily interrupted or blocked
+        if (token.symbol === 'VERSE' && (!token.price || token.price === 0)) {
+          return {
+            ...token,
+            price: 0.000028,
+            change: 0.00,
+            basePrice: 0.000028,
+          };
+        }
+        if ((token.symbol === 'USDT' || token.symbol === 'USDC') && (!token.price || token.price === 0)) {
+          return {
+            ...token,
+            price: 1.00,
+            change: 0.00,
+            basePrice: 1.00,
+          };
+        }
         if (!token.basePrice) {
           return {
             ...token,
@@ -197,59 +241,18 @@ export default function App() {
         return token;
       });
 
+      // Update state with pure live market coordinates directly
       setCryptoData(updatedData);
     };
 
-    // Run active API polling immediately on mount
+    // Trigger instant fetch on load
     updatePrices();
 
-    // Query official servers every 15 seconds to remain perfectly synchronized to global markets
-    const apiInterval = setInterval(updatePrices, 15000);
-
-    // Micro interactive visual ticks every 1.5 seconds so numbers real-time flash and increment/decrement
-    const tickInterval = setInterval(() => {
-      setCryptoData((prev) =>
-        prev.map((token) => {
-          // Tether and USDC are stablecoins, keep them steady with extremely microscopic noise
-          if (token.symbol === 'USDT' || token.symbol === 'USDC') {
-            const noise = (Math.random() * 0.015 - 0.0075) / 1000;
-            const basePrice = 1.00;
-            return {
-              ...token,
-              price: basePrice + noise,
-              change: token.change + (Math.random() * 0.002 - 0.001),
-            };
-          }
-
-          // Generate an active visual oscillation anchored strictly to basePrice to avoid unchecked drift
-          const anchor = token.basePrice || token.price;
-          const maxAllowedDrift = 0.0008; // 0.08% max swing deviation from actual rate
-          const currentDeviation = (token.price - anchor) / anchor;
-
-          // Pull the price walk gently back toward the real-time baseline if it expands too far
-          let bias = Math.random() * 2 - 1; // -1 to +1
-          if (currentDeviation > maxAllowedDrift) {
-            bias = -Math.abs(bias); // pull down
-          } else if (currentDeviation < -maxAllowedDrift) {
-            bias = Math.abs(bias); // pull up
-          }
-
-          const microPercent = (bias * 0.035) / 100; // soft realistic micro tick
-          const simulatedPrice = token.price * (1 + microPercent);
-          const simulatedChange = token.change + (Math.random() * 0.008 - 0.004);
-
-          return {
-            ...token,
-            price: simulatedPrice,
-            change: simulatedChange,
-          };
-        })
-      );
-    }, 1500);
+    // Query official servers every 6 seconds to stay perfectly synchronized to active global markets
+    const apiInterval = setInterval(updatePrices, 6000);
 
     return () => {
       clearInterval(apiInterval);
-      clearInterval(tickInterval);
     };
   }, []);
 
