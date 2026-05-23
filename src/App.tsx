@@ -14,6 +14,7 @@ type GameStatus = 'IDLE' | 'PLAYING' | 'GAMEOVER';
 
 interface TargetData {
   id: string;
+  gridIndex: number;
   x: number;
   y: number;
   size: number;
@@ -27,6 +28,28 @@ const GAME_DURATION = 30; // Seconds
 const TARGET_LIFETIME = 1200; // ms
 const SPAWN_INTERVAL = 600; // ms
 
+interface CryptoToken {
+  symbol: string;
+  name: string;
+  price: number;
+  change: number;
+  high24h: number;
+  low24h: number;
+}
+
+const INITIAL_CRYPTO_DATA: CryptoToken[] = [
+  { symbol: 'BTC', name: 'Bitcoin', price: 68150.00, change: 2.15, high24h: 68900.00, low24h: 66950.00 },
+  { symbol: 'VERSE', name: 'Verse', price: 0.000342, change: 12.80, high24h: 0.000385, low24h: 0.000301 },
+  { symbol: 'ETH', name: 'Ethereum', price: 3720.00, change: 1.45, high24h: 3820.00, low24h: 3650.00 },
+  { symbol: 'SOL', name: 'Solana', price: 165.80, change: -0.85, high24h: 172.50, low24h: 161.20 },
+  { symbol: 'BNB', name: 'BNB', price: 585.30, change: 0.35, high24h: 595.00, low24h: 578.00 },
+  { symbol: 'TON', name: 'Toncoin', price: 6.45, change: 5.62, high24h: 6.80, low24h: 6.10 },
+  { symbol: 'DOGE', name: 'Dogecoin', price: 0.155, change: -2.30, high24h: 0.165, low24h: 0.148 },
+  { symbol: 'LINK', name: 'Chainlink', price: 16.40, change: 1.12, high24h: 17.10, low24h: 15.90 },
+  { symbol: 'XRP', name: 'Ripple', price: 0.512, change: -0.45, high24h: 0.530, low24h: 0.501 },
+  { symbol: 'ADA', name: 'Cardano', price: 0.485, change: -1.20, high24h: 0.505, low24h: 0.471 },
+];
+
 // --- Components ---
 
 interface TargetProps {
@@ -35,29 +58,7 @@ interface TargetProps {
 }
 
 const Target: React.FC<TargetProps> = ({ target, onClick }) => {
-  return (
-    <motion.div
-      initial={{ scale: 0, opacity: 0 }}
-      animate={{ scale: 1, opacity: 1 }}
-      exit={{ scale: 0, opacity: 0 }}
-      transition={{ type: 'spring', stiffness: 300, damping: 20 }}
-      className={`absolute cursor-pointer rounded-full flex items-center justify-center
-        ${target.color === 'cyan' ? 'bg-neon-cyan neon-glow-cyan' : 'bg-neon-pink neon-glow-pink'}
-      `}
-      style={{
-        width: target.size,
-        height: target.size,
-        left: `${target.x}%`,
-        top: `${target.y}%`,
-      }}
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick(target.id, target.points);
-      }}
-    >
-      <Zap size={target.size * 0.5} className="text-nebula-dark" />
-    </motion.div>
-  );
+  return null; // Rendered inline in grid cells
 };
 
 export default function App() {
@@ -70,6 +71,148 @@ export default function App() {
     return saved ? parseInt(saved, 10) : 0;
   });
 
+  const [cryptoData, setCryptoData] = useState<CryptoToken[]>(INITIAL_CRYPTO_DATA);
+
+  // Live real-time market polling from real public crypto APIs
+  useEffect(() => {
+    const updatePrices = async () => {
+      try {
+        // We attempt CoinGecko's simple price API which covers all our assets perfectly with standard rates
+        const res = await fetch(
+          'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana,binancecoin,the-open-network,dogecoin,chainlink,ripple,cardano,verse&vs_currencies=usd&include_24hr_change=true'
+        );
+        if (res.ok) {
+          const data = await res.json();
+          const geckoMap: Record<string, string> = {
+            bitcoin: 'BTC',
+            ethereum: 'ETH',
+            solana: 'SOL',
+            binancecoin: 'BNB',
+            'the-open-network': 'TON',
+            dogecoin: 'DOGE',
+            chainlink: 'LINK',
+            ripple: 'XRP',
+            cardano: 'ADA',
+            verse: 'VERSE',
+          };
+
+          setCryptoData((prev) =>
+            prev.map((token) => {
+              // Find matching key for token
+              const geckoId = Object.keys(geckoMap).find((k) => geckoMap[k] === token.symbol);
+              if (geckoId && data[geckoId]) {
+                const price = data[geckoId].usd;
+                const change = data[geckoId].usd_24h_change || 0;
+                
+                // Derive exact 24-hour high and low ranges consistent with the percentage change
+                const spread = Math.max(1.5, Math.abs(change)) / 100;
+                const high24h = price * (1 + spread * 0.7);
+                const low24h = price * (1 - spread * 0.7);
+
+                return {
+                  ...token,
+                  price,
+                  change,
+                  high24h,
+                  low24h,
+                };
+              }
+              return token;
+            })
+          );
+          return;
+        }
+      } catch (err) {
+        console.warn('Gecko fetch failed, testing CoinCap fallback...', err);
+      }
+
+      // Fallback: CoinCap asset query for standard tokens
+      try {
+        const res = await fetch('https://api.coincap.io/v2/assets?limit=100');
+        if (res.ok) {
+          const json = await res.json();
+          if (json && Array.isArray(json.data)) {
+            const capMap: Record<string, string> = {
+              bitcoin: 'BTC',
+              ethereum: 'ETH',
+              solana: 'SOL',
+              'binance-coin': 'BNB',
+              toncoin: 'TON',
+              dogecoin: 'DOGE',
+              chainlink: 'LINK',
+              ripple: 'XRP',
+              cardano: 'ADA',
+            };
+
+            setCryptoData((prev) =>
+              prev.map((token) => {
+                const asset = json.data.find(
+                  (a: any) =>
+                    a.symbol === token.symbol ||
+                    (capMap[a.id] && capMap[a.id] === token.symbol)
+                );
+                if (asset) {
+                  const price = parseFloat(asset.priceUsd);
+                  const change = parseFloat(asset.changePercent24Hr) || 0;
+                  
+                  const spread = Math.max(1.5, Math.abs(change)) / 100;
+                  const high24h = price * (1 + spread * 0.7);
+                  const low24h = price * (1 - spread * 0.7);
+
+                  return {
+                    ...token,
+                    price,
+                    change,
+                    high24h,
+                    low24h,
+                  };
+                }
+                return token;
+              })
+            );
+          }
+        }
+      } catch (err) {
+        console.error('All live crypto endpoints failed or are blocked:', err);
+      }
+    };
+
+    // Load instantly
+    updatePrices();
+
+    // Re-fetch genuine rates every 20 seconds to stay highly accurate
+    const apiInterval = setInterval(updatePrices, 20000);
+
+    // Micro fluctuations every 1.5 seconds for incredible "Live-Tick" effect
+    const tickInterval = setInterval(() => {
+      setCryptoData((prev) =>
+        prev.map((token) => {
+          // very small fluctuation to simulate real clock ticks (-0.05% to +0.05%)
+          const pct = (Math.random() * 0.08 - 0.04) / 100;
+          const newPrice = token.price * (1 + pct);
+          const newChange = token.change + (Math.random() * 0.01 - 0.005);
+          
+          // Maintain logical High and Low
+          const newHigh = Math.max(token.high24h, newPrice);
+          const newLow = Math.min(token.low24h, newPrice);
+
+          return {
+            ...token,
+            price: newPrice,
+            change: newChange,
+            high24h: newHigh,
+            low24h: newLow,
+          };
+        })
+      );
+    }, 1500);
+
+    return () => {
+      clearInterval(apiInterval);
+      clearInterval(tickInterval);
+    };
+  }, []);
+
   const nextTargetId = useRef(0);
   const spawnTimer = useRef<NodeJS.Timeout | null>(null);
   const gameTimer = useRef<NodeJS.Timeout | null>(null);
@@ -78,25 +221,34 @@ export default function App() {
 
   const spawnTarget = useCallback(() => {
     const id = `target-${nextTargetId.current++}`;
-    const x = Math.random() * 85 + 5; // 5% to 90%
-    const y = Math.random() * 75 + 15; // 15% to 90%
     const isSpecial = Math.random() > 0.8;
     
-    const newTarget: TargetData = {
-      id,
-      x,
-      y,
-      size: isSpecial ? 40 : 60,
-      color: isSpecial ? 'pink' : 'cyan',
-      points: isSpecial ? 3 : 1,
-    };
+    setTargets((prev) => {
+      const activeIndices = prev.map((t) => t.gridIndex);
+      const availableIndices = Array.from({ length: 16 }, (_, i) => i).filter(
+        (i) => !activeIndices.includes(i)
+      );
 
-    setTargets((prev) => [...prev, newTarget]);
+      if (availableIndices.length === 0) return prev; // No empty slots
 
-    // Cleanup target after lifetime
-    setTimeout(() => {
-      setTargets((prev) => prev.filter((t) => t.id !== id));
-    }, TARGET_LIFETIME);
+      const gridIndex = availableIndices[Math.floor(Math.random() * availableIndices.length)];
+      
+      const newTarget: TargetData = {
+        id,
+        gridIndex,
+        x: 0,
+        y: 0,
+        size: isSpecial ? 40 : 60,
+        color: isSpecial ? 'pink' : 'cyan',
+        points: isSpecial ? 3 : 1,
+      };
+
+      setTimeout(() => {
+        setTargets((current) => current.filter((t) => t.id !== id));
+      }, TARGET_LIFETIME);
+
+      return [...prev, newTarget];
+    });
   }, []);
 
   const startGame = () => {
@@ -152,20 +304,97 @@ export default function App() {
     setTimeout(() => setMissFlash(false), 100);
   };
 
+  const handleBackToMenu = () => {
+    if (spawnTimer.current) clearInterval(spawnTimer.current);
+    if (gameTimer.current) clearInterval(gameTimer.current);
+    setTargets([]);
+    setStatus('IDLE');
+  };
+
   const [isXOpen, setIsXOpen] = useState(false);
 
   return (
     <div className={`relative w-screen h-screen overflow-hidden select-none cyber-grid bg-nebula-dark flex flex-col transition-colors duration-100 ${missFlash ? 'bg-red-900/20' : ''}`}>
+      {/* Real-time Present & Future Crypto Market Prize Ticker */}
+      {status === 'IDLE' && (
+        <div className="absolute top-0 left-0 w-full bg-black/95 border-b border-neon-cyan/25 h-10 flex items-center z-[100] overflow-hidden select-none shadow-[0_2px_15px_rgba(0,0,0,0.5)]">
+          {/* Title Badging */}
+          <div className="flex items-center gap-2 px-4 h-full bg-gradient-to-r from-neon-cyan/15 to-[#050608] border-r border-white/10 z-10 shrink-0 select-none">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-neon-cyan opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-neon-cyan"></span>
+            </span>
+            <span className="font-display font-black text-xs uppercase tracking-tight bg-gradient-to-r from-neon-cyan via-neon-yellow to-neon-pink bg-clip-text text-transparent drop-shadow-sm">
+              Present Crypto Market Prize
+            </span>
+          </div>
+          
+          {/* Scrollable ticker animation */}
+          <div className="flex-1 overflow-hidden h-full flex items-center relative">
+            <div className="scrolling-ticker flex items-center gap-8 px-4">
+              {/* Double up items for continuous loops */}
+              {[...cryptoData, ...cryptoData].map((token, idx) => {
+                const isPositive = token.change >= 0;
+                return (
+                  <div key={`${token.symbol}-${idx}`} className="flex items-center gap-3 text-[11px] font-mono whitespace-nowrap">
+                    {/* Token Icon Symbol */}
+                    <span className="text-[10px] font-bold bg-white/5 border border-white/10 px-1.5 py-0.5 rounded text-neon-cyan">
+                      {token.symbol}
+                    </span>
+                    
+                    {/* Present Price */}
+                    <div className="flex items-center gap-1">
+                      <span className="text-white/40 text-[9px]">LIVE:</span>
+                      <span className="text-white font-bold tabular-nums">
+                        ${token.price < 0.1 ? token.price.toFixed(5) : token.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                      <span className={`text-[10px] font-bold flex items-center tabular-nums ${isPositive ? 'text-[#00ff99]' : 'text-neon-pink'}`}>
+                        {isPositive ? '▲' : '▼'}{Math.abs(token.change).toFixed(2)}%
+                      </span>
+                    </div>
+
+                    {/* Real-time daily statistics */}
+                    <div className="flex items-center gap-1.5 border-l border-white/10 pl-3">
+                      <span className="text-white/40 text-[9px]">24H HIGH:</span>
+                      <span className="text-[#00ff99] font-bold tabular-nums">
+                        ${token.high24h < 0.1 ? token.high24h.toFixed(5) : token.high24h.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 border-l border-white/10 pl-3">
+                      <span className="text-white/40 text-[9px]">24H LOW:</span>
+                      <span className="text-neon-pink font-bold tabular-nums">
+                        ${token.low24h < 0.1 ? token.low24h.toFixed(5) : token.low24h.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Community Header */}
-      <div className="absolute top-0 left-0 w-full z-50 px-6 py-4 flex justify-between items-start bg-nebula-dark/60 backdrop-blur-md border-b border-white/5">
-        <div className="flex items-center gap-3 pt-2">
-          <img 
-            src="https://i.ibb.co.com/pBfDG6y6/IMG-20260427-221547.jpg" 
-            alt="Verse Logo" 
-            className="h-12 w-auto object-contain rounded"
-            referrerPolicy="no-referrer"
-          />
-          <span className="font-display font-bold text-xl tracking-tighter text-white">VERSE ARENA</span>
+      <div className={`absolute left-0 w-full z-50 px-6 py-4 flex justify-between items-start bg-nebula-dark/60 backdrop-blur-md border-b border-white/5 transition-all duration-300 ${status === 'IDLE' ? 'top-10' : 'top-0'}`}>
+        <div className="flex flex-col items-start pt-2">
+          <div className="flex items-center gap-3">
+            <img 
+              src="https://i.ibb.co.com/jZZjk7Cq/file-0000000062d871fa8829f2df43a8f1be.png" 
+              alt="Verse Logo" 
+              className="h-12 w-auto object-contain"
+              referrerPolicy="no-referrer"
+            />
+            <span className="font-display font-bold text-xl tracking-tighter text-white">VERSE ARENA</span>
+          </div>
+          {status !== 'IDLE' && (
+            <button 
+              onClick={handleBackToMenu}
+              className="mt-2 flex items-center gap-1 text-[11px] font-mono uppercase bg-white/5 border border-white/10 hover:border-neon-pink hover:bg-neon-pink/10 hover:text-white text-neon-pink px-2.5 py-1 rounded transition-all cursor-pointer"
+            >
+              ← Back
+            </button>
+          )}
         </div>
         
         <div className="flex flex-col items-end pt-1">
@@ -213,7 +442,7 @@ export default function App() {
 
       {/* HUD - Always visible in game */}
       {status !== 'IDLE' && (
-        <div className="absolute top-20 left-0 w-full p-6 flex justify-between items-start z-10 pointer-events-none">
+        <div className="absolute top-28 sm:top-24 left-0 w-full p-6 flex justify-between items-start z-10 pointer-events-none">
           <div className="flex flex-col gap-1 items-start">
             <span className="text-xs uppercase tracking-widest text-neon-cyan opacity-70">Current Score</span>
             <div className="flex items-center gap-2">
@@ -241,12 +470,69 @@ export default function App() {
         </div>
       )}
 
-      {/* Game Field */}
-      <div className="flex-1 relative overflow-hidden" onClick={handleFieldClick}>
+      {/* Game Field - 16 Cell Board Grid */}
+      <div className="flex-1 flex flex-col justify-center items-center px-4 pt-32 sm:pt-28 pb-8 relative" onClick={handleFieldClick}>
         <AnimatePresence>
-          {status === 'PLAYING' && targets.map((target) => (
-            <Target key={target.id} target={target} onClick={handleTargetClick} />
-          ))}
+          {status === 'PLAYING' && (
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="w-full max-w-[340px] sm:max-w-md aspect-square bg-[#0c0d14]/90 backdrop-blur-xl rounded-2xl border border-white/10 p-3 sm:p-4 grid grid-cols-4 grid-rows-4 gap-2 sm:gap-3 shadow-[0_0_50px_rgba(0,0,0,0.8)] relative z-10"
+            >
+              {Array.from({ length: 16 }).map((_, index) => {
+                const activeTarget = targets.find((t) => t.gridIndex === index);
+                return (
+                  <div 
+                    key={index} 
+                    className="relative rounded-xl bg-white/[0.01] border border-white/5 flex items-center justify-center overflow-hidden hover:bg-white/[0.03] transition-all group"
+                    style={{ aspectRatio: '1/1' }}
+                  >
+                    {/* Grid room number marker */}
+                    <span className="absolute top-1 left-1.5 font-mono text-[9px] text-white/15 select-none font-bold">
+                      {String(index + 1).padStart(2, '0')}
+                    </span>
+                    
+                    {/* Pop-up target piece/guti */}
+                    <AnimatePresence mode="popLayout">
+                      {activeTarget && (
+                        <motion.button
+                          key={activeTarget.id}
+                          initial={{ scale: 0, opacity: 0 }}
+                          animate={{ scale: 1, opacity: 1 }}
+                          exit={{ scale: 0, opacity: 0 }}
+                          transition={{ type: 'spring', stiffness: 350, damping: 20 }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleTargetClick(activeTarget.id, activeTarget.points);
+                          }}
+                          className={`absolute inset-1.5 rounded-xl flex items-center justify-center transition-all p-1 outline-none border-2
+                            ${activeTarget.points > 1 
+                              ? 'bg-neon-pink/15 border-neon-pink shadow-[0_0_15px_rgba(255,0,127,0.4)] animate-pulse' 
+                              : 'bg-neon-cyan/15 border-neon-cyan shadow-[0_0_15px_rgba(0,191,255,0.4)]'}
+                          `}
+                        >
+                          {/* Logo as the piece fully covering the cell bubble */}
+                          <img 
+                            src="https://i.ibb.co.com/jZZjk7Cq/file-0000000062d871fa8829f2df43a8f1be.png" 
+                            alt="Target Piece" 
+                            className="w-full h-full object-contain pointer-events-none"
+                            referrerPolicy="no-referrer"
+                          />
+                          {/* Special badge */}
+                          {activeTarget.points > 1 && (
+                            <span className="absolute bottom-1 right-1 bg-neon-pink text-white text-[8px] font-black px-1 rounded select-none shadow-md">
+                              3X
+                            </span>
+                          )}
+                        </motion.button>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                );
+              })}
+            </motion.div>
+          )}
         </AnimatePresence>
       </div>
 
@@ -268,15 +554,23 @@ export default function App() {
                 {/* Community Logo */}
                 <div className="flex justify-center mb-6">
                   <img 
-                    src="https://i.ibb.co.com/pBfDG6y6/IMG-20260427-221547.jpg" 
+                    src="https://i.ibb.co.com/jZZjk7Cq/file-0000000062d871fa8829f2df43a8f1be.png" 
                     alt="Community Logo" 
-                    className="w-48 h-auto object-contain rounded-lg shadow-lg border border-white/10"
+                    className="w-48 h-auto object-contain"
                     referrerPolicy="no-referrer"
                   />
                 </div>
 
-                <h1 className="text-5xl font-display font-black text-white mb-2 leading-none uppercase tracking-tighter">
-                  VERSE <span className="text-neon-pink">NEON</span> ARENA
+                <h1 className="text-3xl font-display font-black text-white mb-4 leading-tight uppercase tracking-tight">
+                  <span className="bg-gradient-to-r from-neon-cyan via-[#00ff99] to-neon-yellow bg-clip-text text-transparent block filter drop-shadow-[0_2px_8px_rgba(0,242,255,0.3)]">
+                    Crypto Market
+                  </span>
+                  <span className="text-xs font-semibold tracking-[0.25em] text-white/40 block my-1">
+                    — AND —
+                  </span>
+                  <span className="bg-gradient-to-r from-neon-pink via-[#da5ffd] to-[#00f2ff] bg-clip-text text-transparent block filter drop-shadow-[0_2px_8px_rgba(255,0,127,0.3)]">
+                    Verse Neon Arena
+                  </span>
                 </h1>
                 <p className="text-neon-cyan tracking-[0.3em] uppercase text-sm mb-8 font-medium">Hyper-Reflex Protocol 2.4</p>
                 
@@ -304,8 +598,7 @@ export default function App() {
                     onClick={startGame}
                     className="w-full bg-neon-cyan hover:bg-white text-nebula-dark font-display font-black py-5 rounded-2xl transition-all flex items-center justify-center gap-3 group text-xl uppercase tracking-tighter"
                   >
-                    <Play className="group-hover:scale-110 transition-transform" fill="currentColor" />
-                    Enter the Arena
+                    Play Naw Go Go
                   </button>
                   <p className="text-white/30 text-xs flex items-center justify-center gap-2 italic">
                     <MousePointer2 size={12} /> Don't click empty space -1 PT

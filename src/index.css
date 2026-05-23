@@ -30,6 +30,18 @@
       linear-gradient(90deg, rgba(0, 242, 255, 0.05) 1px, transparent 1px);
     background-size: 50px 50px;
   }
+  @keyframes marquee {
+    0% { transform: translateX(0%); }
+    100% { transform: translateX(-50%); }
+  }
+  .scrolling-ticker {
+    display: flex;
+    width: max-content;
+    animation: marquee 25s linear infinite;
+  }
+  .scrolling-ticker:hover {
+    animation-play-state: paused;
+  }
 }
 
 body {
