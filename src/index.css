@@ -31,13 +31,16 @@
     background-size: 50px 50px;
   }
   @keyframes marquee {
-    0% { transform: translateX(0%); }
-    100% { transform: translateX(-50%); }
+    0% { transform: translate3d(0, 0, 0); }
+    100% { transform: translate3d(-50%, 0, 0); }
   }
   .scrolling-ticker {
     display: flex;
     width: max-content;
-    animation: marquee 25s linear infinite;
+    animation: marquee 35s linear infinite;
+    will-change: transform;
+    backface-visibility: hidden;
+    transform: translate3d(0, 0, 0);
   }
   .scrolling-ticker:hover {
     animation-play-state: paused;
@@ -48,7 +51,7 @@ body {
   margin: 0;
   background-color: var(--color-nebula-dark);
   color: white;
-  overflow: hidden;
+  overflow-y: auto;
   font-family: var(--font-sans);
 }
 
